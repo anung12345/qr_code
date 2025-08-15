@@ -96,5 +96,5 @@ def verify():
         return jsonify(error=f"internal error: {str(e)}"), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8000"))
+    port = int(os.environ.get("PORT", "9700"))
     app.run(host="0.0.0.0", port=port)
