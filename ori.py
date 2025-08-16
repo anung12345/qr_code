@@ -380,20 +380,31 @@ def file_to_base64(path_file: str) -> str:
     with open(path_file, "rb") as f:
         return base64.b64encode(f.read()).decode("ascii")
 
-def buat_label_keaslian_b64(output_name: str = "label_ali.png", dpi: int = 1200, simpan_b64: bool = True):
+def buat_label_keaslian_b64(kode_unik: str,
+                            output_name: str = "label_ali.png",
+                            dpi: int = 1200,
+                            simpan_b64: bool = True):
     """
-    Bungkus buat_label_keaslian() dari ahm.py lalu hasil PNG-nya dikonversi ke Base64.
+    Membuat label keaslian + hasilnya dikonversi ke Base64.
+    - kode_unik: string yang akan ditaruh di atas QR
+    - output_name: nama file PNG hasil
+    - dpi: resolusi cetak
+    - simpan_b64: jika True, simpan Base64 ke file .txt
     """
+    os.makedirs("data", exist_ok=True)
 
-    # 1) Lokasi file output (asumsi ahm.py simpan ke folder data/)
+    # 1) Buat label
+    buat_label_keaslian(kode_unik=kode_unik, output_name=output_name, dpi=dpi)
+
+    # 2) Lokasi file hasil
     output_path = os.path.join("data", output_name)
     if not os.path.exists(output_path):
-        raise FileNotFoundError(f"File {output_path} tidak ditemukan. Pastikan ahm.py menyimpan ke folder data/")
+        raise FileNotFoundError(f"File {output_path} tidak ditemukan setelah proses generate.")
 
-    # 2) Konversi ke base64
+    # 3) Konversi ke base64
     b64 = file_to_base64(output_path)
 
-    # 3) Simpan base64 ke file txt (opsional)
+    # 4) Simpan base64 ke file txt (opsional)
     b64_path = os.path.splitext(output_path)[0] + "_base64.txt"
     if simpan_b64:
         with open(b64_path, "w", encoding="utf-8") as f:
