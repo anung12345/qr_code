@@ -2,3 +2,5 @@
 .venv
 data
 patch.py
+key.txt
+template_copyproof.png
