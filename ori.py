@@ -4,9 +4,10 @@ import numpy as np
 import base64
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
+import time
 
 
-# ---------- util font ----------
+# ---------------- util font ----------------
 def _load_font(size_px: int):
     try:
         return ImageFont.truetype("arial.ttf", size_px)
@@ -29,86 +30,106 @@ def _font_fit(draw: ImageDraw.ImageDraw, text: str, max_w: int, max_h: int,
             hi = mid - 1
     return best
 
-# ---------- generator ----------
+# ---------------- fungsi utama ----------------
 def buat_label_keaslian(
-    kode_unik: str,
-    output_name="label_ali.png",
-    dpi=1200,
+    counter=1,
+    output_name: str = "",     # legacy arg (diabaikan jika fixed_name != None)
+    dpi: int = 1200,
     *,
-    fft_amp: float = 1.5,     # 0.8–2.5 disarankan
-    fft_fx: int   = 10,
-    fft_fy: int   = 6,
-    fp_ratio: float = 0.10,   # ukuran fingerprint relatif sisi QR (mis. 0.10 = 10%)
-    seed: int | None = None
+    fft_amp: float = 1.5,      # 0.8–2.5 disarankan
+    fft_fx: int = 10,
+    fft_fy: int = 6,
+    fp_ratio: float = 0.10,    # ukuran fingerprint relatif sisi QR (mis. 0.10 = 10%)
+    seed: int | None = None,
+    prefix_kode: str = "AHM-PM-",               # prefix untuk teks di atas QR
+    prefix_qr_payload: str = "STICKERTEST001-", # prefix isi QR
+    fixed_name: str | None = None               # paksa nama file (mis. "label_ali.png")
 ):
     """
     Label 6.5mm x 16mm @1200dpi:
-      - watermark teks 'ALI' halus
+      - watermark teks 'AHM' halus
       - bar hitam atas/bawah + teks
       - kode_unik kecil & menempel di atas QR
-      - QR ke https://www.google.com
+      - QR berisi prefix_qr_payload + <epoch>-<kodeZfill>, ex: STICKERTEST001-1724210000-00042
       - fingerprint (noise acak) di tengah QR (fragile)
       - FFT-watermark di background (robust, exclude area QR & bars)
-    Output di data/: PNG + *_fingerprint.npy + *_meta.npy
+    Simpan di data/: PNG + *_fingerprint.npy + *_meta.npy
     """
+    # format & sanitasi counter -> kode unik
+    if counter is None or str(counter).strip() == "":
+        counter = 0
+    kode_unik = str(counter).strip()
+    kode_unik_z = kode_unik.zfill(5)
+
+    # buat id waktu + nama berkas
+    ts = int(time.time())
+    basename_core = f"{ts}-{kode_unik_z}"                   # contoh: 1724210000-00042
+    qr_payload   = f"{prefix_qr_payload}{basename_core}"    # contoh: STICKERTEST001-1724210000-00042
+    kode_teks    = f"{prefix_kode}{basename_core}"          # contoh: AHM-PM-1724210000-00042
+
+    # tentukan nama file final
+    if fixed_name:  # paksa nama tertentu
+        final_png_name = fixed_name if fixed_name.lower().endswith(".png") else (fixed_name + ".png")
+    else:
+        # abaikan output_name legacy; gunakan pola waktu-counter
+        final_png_name = f"{basename_core}.png"
+
     os.makedirs("data", exist_ok=True)
     if seed is not None:
         np.random.seed(seed)
 
+    # ukuran kanvas
     mm_to_px = lambda mm: int(round((mm / 25.4) * dpi))
     width_px, height_px = mm_to_px(6.5), mm_to_px(16.0)
 
     img = Image.new("RGB", (width_px, height_px), "white")
     draw = ImageDraw.Draw(img)
 
-    # --- watermark teks 'ALI' (visual halus) ---
+    # watermark teks 'AHM' (visual halus)
     spacing = max(mm_to_px(2.0), 6)
     wm_font = _load_font(max(mm_to_px(0.9), 6))
     for y in range(0, height_px, spacing):
         for x in range(0, width_px, spacing):
-            draw.text((x, y), "ALI", fill=(205, 205, 205), font=wm_font)
+            draw.text((x, y), "AHM", fill=(205, 205, 205), font=wm_font)
 
-    # --- bar hitam atas/bawah ---
+    # bar hitam atas & bawah
     bar_h = max(mm_to_px(1.1), int(height_px * 0.08))
     draw.rectangle([0, 0, width_px, bar_h], fill="black")
     draw.rectangle([0, height_px - bar_h, width_px, height_px], fill="black")
 
-    # --- teks bar ---
+    # teks bar
     top_text = "JAMINAN KEASLIAN PRODUK"
-    bottom_text = "ALI"
+    bottom_text = "AHM"
     font_top = _font_fit(draw, top_text, width_px - 2, bar_h - 2)
     font_bot = _font_fit(draw, bottom_text, width_px - 2, int(bar_h * 0.6))
     draw.text((width_px // 2, bar_h // 2), top_text, fill="white", anchor="mm", font=font_top)
     draw.text((width_px // 2, height_px - bar_h // 2), bottom_text, fill="white", anchor="mm", font=font_bot)
 
-    # --- QR code ---
-    tautan = "https://www.google.com"
+    # QR code
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_H)
-    qr.add_data(tautan); qr.make(fit=True)
+    qr.add_data(qr_payload)
+    qr.make(fit=True)
     inner_h = height_px - 2 * bar_h
     max_qr_side = int(min(width_px * 0.88, inner_h * 0.88))
     img_qr = qr.make_image(fill_color="black", back_color="white").convert("RGB").resize(
-        (max_qr_side, max_qr_side), resample=Image.NEAREST  # jaga ketajaman modul
+        (max_qr_side, max_qr_side), resample=Image.NEAREST
     )
     qr_x = (width_px - max_qr_side) // 2
     qr_y = bar_h + (inner_h - max_qr_side) // 2
     img.paste(img_qr, (qr_x, qr_y))
 
-    # --- KODE UNIK: kecil & benar‑benar nempel di atas QR (pakai textbbox) ---
+    # KODE UNIK: kecil & menempel di atas QR
     max_w_teks = int(max_qr_side * 0.55)   # 55% lebar QR
-    max_h_teks = mm_to_px(0.35)            # tinggi maks 0.35 mm
-    font_kode = _font_fit(draw, kode_unik, max_w=max_w_teks, max_h=max_h_teks)
-
-    # hitung ukuran aktual teks & posisikan sehingga bottom teks = top QR - gap
-    l, t, r, b = draw.textbbox((0, 0), kode_unik, font=font_kode)
+    max_h_teks = mm_to_px(0.35)            # tinggi maks ~0.35 mm
+    font_kode = _font_fit(draw, kode_teks, max_w=max_w_teks, max_h=max_h_teks)
+    l, t, r, b = draw.textbbox((0, 0), kode_teks, font=font_kode)
     text_w, text_h = r - l, b - t
     text_x = (width_px - text_w) // 2
     text_y = qr_y - text_h + 1
-    # safety agar tidak nabrak bar atas
-    text_y = max(text_y, bar_h + mm_to_px(0.15))
-    draw.text((text_x, text_y), kode_unik, fill="black", font=font_kode)
+    text_y = max(text_y, bar_h + mm_to_px(0.15))  # safety dari bar atas
+    draw.text((text_x, text_y), kode_teks, fill="black", font=font_kode)
 
-    # --- fingerprint (noise acak) di tengah QR ---
+    # fingerprint (noise acak) di tengah QR
     noise_radius = max(2, int(round(max_qr_side * fp_ratio)))
     cx, cy = qr_x + max_qr_side // 2, qr_y + max_qr_side // 2
     noise = np.random.randint(0, 256, (2 * noise_radius, 2 * noise_radius), dtype=np.uint8)
@@ -117,7 +138,7 @@ def buat_label_keaslian(
     ImageDraw.Draw(mask_fp).ellipse((0, 0, 2 * noise_radius, 2 * noise_radius), fill=255)
     img.paste(noise_img, (cx - noise_radius, cy - noise_radius), mask_fp)
 
-    # --- FFT-watermark (robust) hanya background (exclude QR & bars) ---
+    # FFT-watermark (robust) di background, exclude QR & bars
     wm_mask = np.ones((height_px, width_px), dtype=np.float32)
     wm_mask[:bar_h, :] = 0.0
     wm_mask[height_px - bar_h:, :] = 0.0
@@ -136,27 +157,49 @@ def buat_label_keaslian(
     ycrcb[:, :, 0] = Y
     img = Image.fromarray(cv2.cvtColor(ycrcb.astype(np.uint8), cv2.COLOR_YCrCb2RGB))
 
-    # --- simpan ---
-    output_path = os.path.join("data", output_name)
-    fingerprint_path = os.path.splitext(output_path)[0] + "_fingerprint.npy"
-    meta_path = os.path.splitext(output_path)[0] + "_meta.npy"
+    # simpan
+    output_path = os.path.join("data", final_png_name)
+    base_noext = os.path.splitext(output_path)[0]
+    fingerprint_path = base_noext + "_fingerprint.npy"
+    meta_path = base_noext + "_meta.npy"
 
     np.save(fingerprint_path, noise)
     meta = {
-        "cx_rel": cx / width_px, "cy_rel": cy / height_px, "r_rel": noise_radius / width_px,
-        "dpi": dpi, "size_px": (width_px, height_px), "size_mm": (6.5, 16.0),
+        "cx_rel": cx / width_px,
+        "cy_rel": cy / height_px,
+        "r_rel": noise_radius / width_px,
+        "dpi": dpi,
+        "size_px": (width_px, height_px),
+        "size_mm": (6.5, 16.0),
         "fft": {"amp": float(fft_amp), "fx": int(fft_fx), "fy": int(fft_fy), "masked": True,
                 "qr_box": [int(x1), int(y1), int(x2), int(y2)], "bar_h": int(bar_h)},
-        "kode_unik": kode_unik
+        "kode_unik": kode_teks,
+        "qr_payload": qr_payload,
+        "output_name": final_png_name,
+        "timestamp": ts,
     }
     np.save(meta_path, meta)
     img.save(output_path, dpi=(dpi, dpi))
 
     print(f"✅ Label disimpan: {output_path}")
-    print(f"🔑 Kode unik: {kode_unik}")
+    print(f"🔑 Kode unik (teks): {kode_teks}")
+    print(f"🔗 QR payload: {qr_payload}")
     print(f"🧬 Fingerprint: {fingerprint_path}")
     print(f"📍 Metadata: {meta_path}")
     print(f"🌊 FFT-WM: amp={fft_amp}, fx={fft_fx}, fy={fft_fy}")
+
+    return {
+        "output_path": output_path,
+        "fingerprint_path": fingerprint_path,
+        "meta_path": meta_path,
+        "output_name": final_png_name,
+        "kode_unik_text": kode_teks,
+        "qr_payload": qr_payload,
+        "width_px": width_px,
+        "height_px": height_px,
+        "dpi": dpi,
+    }
+
 
 def _cari_path(kandidat):
     """Balik path valid. Coba persis, lalu prefix 'data/'."""
@@ -256,8 +299,12 @@ def verifikasi_label_fleksibel(
 ):
     """
     Verifikasi hybrid:
-      - Fingerprint (MSE) → authentic
+      - Fingerprint (MSE) → autentikasi (fragile)
       - FFT-watermark (SNR) → deteksi watermark robust di background
+    Keputusan:
+      - ✅ ASLI   : fingerprint cocok (MSE < ambang)
+      - ⚠️ RUSAK  : fingerprint TIDAK cocok, tetapi watermark ATAU QR masih OK
+      - ❌ SALINAN: fingerprint TIDAK cocok, watermark TIDAK terdeteksi, dan QR TIDAK terbaca
     """
     # ----- Ambil fingerprint & meta -----
     base = os.path.splitext(output_name)[0]
@@ -268,12 +315,13 @@ def verifikasi_label_fleksibel(
 
     fingerprint = np.load(fingerprint_path)  # grayscale (h,w)
     meta = np.load(meta_path, allow_pickle=True).item()
-    cx_rel, cy_rel, r_rel = meta["cx_rel"], meta["cy_rel"], meta["r_rel"]
+    cx_rel, cy_rel, r_rel = float(meta["cx_rel"]), float(meta["cy_rel"]), float(meta["r_rel"])
     meta_fft = meta.get("fft", None)
 
     # ----- Tentukan sumber gambar yang diverifikasi -----
     if foto_path is None:
-        sumber = _cari_path(output_name)  # mode test: file generate
+        # mode test: pakai file generate
+        sumber = _cari_path(output_name)
         if not sumber:
             raise FileNotFoundError(f"File generate tidak ditemukan: data/{output_name}")
     else:
@@ -304,7 +352,7 @@ def verifikasi_label_fleksibel(
 
     # ----- MSE autentikasi (fragile fingerprint) -----
     mse = float(np.mean((crop_resized.astype("float32") - fingerprint.astype("float32"))**2))
-    authentic = mse < threshold_mse
+    fp_ok = bool(mse < threshold_mse)
 
     # ----- Baca QR (3 cara) -----
     qr = cv2.QRCodeDetector()
@@ -321,6 +369,7 @@ def verifikasi_label_fleksibel(
     data_crop, _, _ = qr.detectAndDecode(crop_qr)
 
     qr_data = data_raw or data_thr or data_crop or ""
+    qr_ok = bool(qr_data)
 
     # ----- FFT-watermark detection (robust) -----
     dbg_base = os.path.join("data", f"{base}_dbg") if simpan_debug else None
@@ -332,7 +381,7 @@ def verifikasi_label_fleksibel(
         fft_fy=(meta_fft or {}).get("fy", 6),
         save_dbg=(dbg_base + "_spec.png") if simpan_debug else None
     )
-    watermark_present = fft_snr >= float(fft_snr_threshold)
+    wm_ok = bool(fft_snr >= float(fft_snr_threshold))
 
     # ----- Simpan debug -----
     debug_paths = {}
@@ -350,31 +399,54 @@ def verifikasi_label_fleksibel(
         # tambahkan paths FFT
         debug_paths.update(fft_detail.get("debug", {}))
 
-    # ----- Print ringkas -----
-    status = "✅ ASLI" if authentic else ("⚠️ ASLI (COPY, WM terdeteksi)" if watermark_present else "❌ SALINAN")
+    # ----- Keputusan tiga level + cetak ringkas -----
+    if fp_ok:
+        status_code = "ASLI"
+        status = "✅ ASLI"
+        reason = "Fingerprint cocok (MSE di bawah ambang)."
+    else:
+        if wm_ok or qr_ok:
+            status_code = "RUSAK"
+            detail = []
+            if not wm_ok: detail.append("watermark tidak terdeteksi")
+            if not fp_ok: detail.append("fingerprint tidak cocok")
+            if not qr_ok: detail.append("QR sulit/tidak terbaca")
+            reason = " / ".join(detail) if detail else "Sinyal tidak ideal."
+            status = f"⚠️ RUSAK — {reason}"
+        else:
+            status_code = "SALINAN"
+            status = "❌ SALINAN"
+            reason = "Fingerprint tidak cocok, watermark tidak terdeteksi, dan QR tidak terbaca."
+
     print(f"📄 Sumber: {sumber}")
-    print(f"📏 MSE = {mse:.2f}  |  Ambang = {threshold_mse}  ->  {'cocok' if authentic else 'tidak'}")
-    print(f"🌊 FFT SNR ≈ {fft_snr:.2f}  |  Ambang = {fft_snr_threshold}  ->  {'terdeteksi' if watermark_present else 'tidak'}")
-    print(f"🔗 QR: {qr_data if qr_data else '(tidak terbaca)'}")
+    print(f"📏 MSE = {mse:.2f}  |  Ambang = {threshold_mse}  ->  {'cocok' if fp_ok else 'tidak'}")
+    print(f"🌊 FFT SNR ≈ {fft_snr:.2f}  |  Ambang = {fft_snr_threshold}  ->  {'terdeteksi' if wm_ok else 'tidak'}")
+    print(f"🔗 QR: {qr_data if qr_ok else '(tidak terbaca)'}")
     print(f"🧾 Status: {status}")
 
     return {
         "source": sumber,
         "mse": round(mse, 2),
         "threshold_mse": threshold_mse,
-        "authentic": bool(authentic),
+        "authentic": fp_ok,                 # tetap expose sebagai "fingerprint ok"
+        "fp_ok": fp_ok,
         "fft_snr": round(fft_snr, 2),
         "fft_threshold": float(fft_snr_threshold),
-        "watermark_present": bool(watermark_present),
-        "copy_with_watermark": (not authentic) and watermark_present,
-        "status": status,
+        "watermark_present": wm_ok,
+        "wm_ok": wm_ok,
         "qr_data": qr_data,
+        "qr_ok": qr_ok,
+        "status": status,
+        "status_code": status_code,         # 'ASLI' | 'RUSAK' | 'SALINAN'
+        "reason": reason,
+        "copy_with_watermark": (not fp_ok) and wm_ok,  # kompatibel dengan versi lama
         "methods": {"raw": bool(data_raw), "threshold": bool(data_thr), "crop": bool(data_crop)},
         "roi": {"cx": cx, "cy": cy, "r": r, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                 "qr_crop": {"X1": X1, "Y1": Y1, "X2": X2, "Y2": Y2}},
         "fft_detail": fft_detail,
         "paths": {"fingerprint": fingerprint_path, "meta": meta_path, "debug": debug_paths},
     }
+
 
 def file_to_base64(path_file: str) -> str:
     with open(path_file, "rb") as f:
@@ -437,9 +509,10 @@ def base64txt_to_file(txt_path: str, output_path: str):
 
 
 if __name__ == "__main__":
-    hasil = verifikasi_label_fleksibel("label_ali.png", "label_ali.png", 12000)
-    print(hasil)
+    # hasil = verifikasi_label_fleksibel("label_ali.png", "label_ali.png", 12000)
+    # print(hasil)
     # b = base64txt_to_file("data/label_ali_base64.txt", "data/label_ali_decoded.png")
     # print(b)
-    # buat_label_keaslian(kode_unik="ABC12345")
+    a = buat_label_keaslian()
+    print(a)
     # buat_label_keaslian_b64()
