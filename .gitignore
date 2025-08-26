@@ -2,8 +2,4 @@
 .venv
 data
 key.txt
-template_copyproof.png
-verify_zip.py
-verify_raw.py
-verify_64.py
-verify.py
+con.py
