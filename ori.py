@@ -63,6 +63,7 @@ def buat_label_keaslian(
 
     # buat id waktu + nama berkas
     ts = int(time.time())
+    ts = str(ts % (10**10)).zfill(10)
     basename_core = f"{ts}-{kode_unik_z}"                   # contoh: 1724210000-00042
     qr_payload   = f"{prefix_qr_payload}{basename_core}"    # contoh: STICKERTEST001-1724210000-00042
     kode_teks    = f"{prefix_kode}{basename_core}"          # contoh: AHM-PM-1724210000-00042
@@ -509,7 +510,7 @@ def base64txt_to_file(txt_path: str, output_path: str):
 
 
 if __name__ == "__main__":
-    # hasil = verifikasi_label_fleksibel("label_ali.png", "label_ali.png", 12000)
+    # hasil = verifikasi_label_fleksibel("1756266757-00001.png", "1756266757-00001.png", 12000)
     # print(hasil)
     # b = base64txt_to_file("data/label_ali_base64.txt", "data/label_ali_decoded.png")
     # print(b)
