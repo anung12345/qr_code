@@ -166,39 +166,6 @@ def verify_files():
         except Exception as e:
             return jsonify(error=f"Gagal verifikasi: {e}"), 500
 
-        # >>> TAMBAHAN: jika QR tidak terbaca di tahap verifikasi, PATCH status "4"
-        if not result.get("qr_ok", False):
-            try:
-                resp_patch = patch_validatecp(
-                    idvalicp=idvalicp,
-                    kode_unik_qr=kode_unik_qr,   # jika ingin kosong juga boleh
-                    qr_data=qr_payload,          # jika ingin kosong juga boleh
-                    status_text="4",
-                    location="JAKARTA001",
-                    barcode_item="TESTITEMS",
-                    part_name="TEST AUTO PART",
-                )
-                patch_info = {
-                    "status_code": resp_patch.status_code,
-                    "body": (resp_patch.json() if resp_patch.headers.get("Content-Type", "").startswith("application/json")
-                             else resp_patch.text[:500])
-                }
-            except Exception as e:
-                patch_info = {"error": f"Gagal PATCH validatecp: {e}"}
-
-            try:
-                shutil.rmtree("data", ignore_errors=True)
-            except Exception:
-                pass
-
-            return jsonify({
-                "ok": False,
-                "error": "QR tidak terbaca pada verifikasi",
-                "verify_result": result,
-                "validate_patch": patch_info
-            }), 200
-        # <<< END TAMBAHAN
-
         # 4) petakan status → {ASLI|RUSAK|SALINAN}
         status_text = result["status_code"].upper()
         if status_text not in ("ASLI", "RUSAK", "SALINAN"):
