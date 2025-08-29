@@ -79,13 +79,6 @@ def verify_files():
       "fft_snr_threshold": 2.0,     # optional
       "debug": 0|1                  # optional
     }
-    Alur:
-      - Baca QR dari raw_photo
-      - GET sticker_id via @list_sticker
-      - Download referensi (PNG, fingerprint, meta)
-      - Verifikasi
-      - Hitung kode_unik dari qr_data (prefix STICKERTEST001 → AHM-PM)
-      - PATCH validatecp/{idvalicp}
     """
     payload = request.get_json(silent=True)
     if not payload:
@@ -104,11 +97,34 @@ def verify_files():
     try:
         lookup = get_qr_and_sticker_id_from_base64(b64_str)
     except Exception as e:
-        status_text = "4"
         return jsonify(error=f"Gagal proses QR/list: {e}"), 500
 
     if not lookup.get("ok"):
-        return jsonify(error="QR/list error", detail=lookup), 400
+        # QR tidak terbaca pada tahap lookup → PATCH status "4"
+        try:
+            resp_patch = patch_validatecp(
+                idvalicp=idvalicp,
+                kode_unik_qr="tidak terbaca",
+                qr_data="tidak terbaca",
+                status_text="4",
+                location="JAKARTA001",
+                barcode_item="TESTITEMS",
+                part_name="TEST AUTO PART",
+            )
+            patch_info = {
+                "status_code": resp_patch.status_code,
+                "body": (resp_patch.json() if resp_patch.headers.get("Content-Type", "").startswith("application/json")
+                         else resp_patch.text[:500])
+            }
+        except Exception as e:
+            patch_info = {"error": f"Gagal PATCH validatecp: {e}"}
+
+        return jsonify({
+            "ok": False,
+            "error": "QR/list error",
+            "detail": lookup,
+            "validate_patch": patch_info
+        }), 200
 
     qr_payload  = lookup["qr_payload"]      # contoh: STICKERTEST001-1755845004-00001
     sticker_id  = lookup["sticker_id"]      # contoh: STR20...
@@ -150,14 +166,45 @@ def verify_files():
         except Exception as e:
             return jsonify(error=f"Gagal verifikasi: {e}"), 500
 
+        # >>> TAMBAHAN: jika QR tidak terbaca di tahap verifikasi, PATCH status "4"
+        if not result.get("qr_ok", False):
+            try:
+                resp_patch = patch_validatecp(
+                    idvalicp=idvalicp,
+                    kode_unik_qr=kode_unik_qr,   # jika ingin kosong juga boleh
+                    qr_data=qr_payload,          # jika ingin kosong juga boleh
+                    status_text="4",
+                    location="JAKARTA001",
+                    barcode_item="TESTITEMS",
+                    part_name="TEST AUTO PART",
+                )
+                patch_info = {
+                    "status_code": resp_patch.status_code,
+                    "body": (resp_patch.json() if resp_patch.headers.get("Content-Type", "").startswith("application/json")
+                             else resp_patch.text[:500])
+                }
+            except Exception as e:
+                patch_info = {"error": f"Gagal PATCH validatecp: {e}"}
+
+            try:
+                shutil.rmtree("data", ignore_errors=True)
+            except Exception:
+                pass
+
+            return jsonify({
+                "ok": False,
+                "error": "QR tidak terbaca pada verifikasi",
+                "verify_result": result,
+                "validate_patch": patch_info
+            }), 200
+        # <<< END TAMBAHAN
+
         # 4) petakan status → {ASLI|RUSAK|SALINAN}
         status_text = result["status_code"].upper()
-
         if status_text not in ("ASLI", "RUSAK", "SALINAN"):
-            # fallback jika tidak dikenali
-            status_text = "SALINAN"  # atau "ASLI" sesuai default yang kamu mau
+            status_text = "SALINAN"
 
-        # 5) PATCH ke validatecp
+        # 5) PATCH ke validatecp (normal flow)
         try:
             resp_patch = patch_validatecp(
                 idvalicp=idvalicp,
@@ -189,6 +236,7 @@ def verify_files():
             "sticker_id": sticker_id,
             "kode_unik": kode_unik_qr,
             "verify_result": result,
+            "status_text": status_text,
             "validate_patch": patch_info,
         }), 200
 

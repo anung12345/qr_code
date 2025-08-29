@@ -9,7 +9,7 @@ TIMEOUT   = 30
 
 _auth = HTTPBasicAuth(API_USER, API_PASS)
 
-STATUS_MAP = {"ASLI": 1, "RUSAK": 2, "SALINAN": 3}
+STATUS_MAP = {"ASLI": 1, "RUSAK": 2, "SALINAN": 3, "4": 4}
 
 def patch_validatecp(
     idvalicp: str,
