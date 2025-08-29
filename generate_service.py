@@ -104,6 +104,7 @@ def verify_files():
     try:
         lookup = get_qr_and_sticker_id_from_base64(b64_str)
     except Exception as e:
+        status_text = "4"
         return jsonify(error=f"Gagal proses QR/list: {e}"), 500
 
     if not lookup.get("ok"):

@@ -512,8 +512,8 @@ def base64txt_to_file(txt_path: str, output_path: str):
 if __name__ == "__main__":
     # hasil = verifikasi_label_fleksibel("1756266757-00001.png", "1756266757-00001.png", 12000)
     # print(hasil)
-    # b = base64txt_to_file("data/label_ali_base64.txt", "data/label_ali_decoded.png")
-    # print(b)
-    a = buat_label_keaslian()
-    print(a)
+    b = base64txt_to_file("photo_2025-08-28_13-56-32_base64.txt", "output.png")
+    print(b)
+    # a = buat_label_keaslian()
+    # print(a)
     # buat_label_keaslian_b64()

@@ -21,7 +21,7 @@ def patch_validatecp(
     part_name: str = "TEST AUTO PART",
 ):
     url = f"{VALIDATE_API_BASE}/{idvalicp}"
-    status_map = {"ASLI": 1, "RUSAK": 2, "SALINAN": 3}
+    status_map = {"ASLI": 1, "RUSAK": 2, "SALINAN": 3, "4": 4}
     status_code = status_map.get(status_text.upper(), 3)
 
     payload = {
