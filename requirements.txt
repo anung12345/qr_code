@@ -20,6 +20,7 @@ packaging==25.0
 pillow==11.3.0
 pycparser==2.22
 PyWavelets==1.8.0
+pyzbar==0.1.9
 qrcode==8.2
 requests==2.32.4
 scikit-image==0.25.2

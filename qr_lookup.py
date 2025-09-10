@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import requests
 from requests.auth import HTTPBasicAuth
+from pyzbar.pyzbar import decode
 
 LIST_API_BASE = "http://10.74.18.162:8075/db/copyproof/sticker"
 API_USER = "testerzero"
@@ -99,6 +100,7 @@ def _read_qr_text(img_bgr: np.ndarray) -> str:
     - coba langsung (as-is)
     - coba dengan preprocessing (CLAHE + unsharp + adaptive threshold)
     - coba berbagai skala (down & up) pada kedua versi (as-is dan enhanced)
+    - fallback: pyzbar (lebih toleran)
     """
     img_bgr = _cap_max_side(img_bgr, 2000)
 
@@ -127,7 +129,10 @@ def _read_qr_text(img_bgr: np.ndarray) -> str:
             # hindari terlalu besar (limit 2400)
             if max(nw, nh) > 2400:
                 continue
-            resized = cv2.resize(base, (nw, nh), interpolation=cv2.INTER_CUBIC if s > 1.0 else cv2.INTER_AREA)
+            resized = cv2.resize(
+                base, (nw, nh),
+                interpolation=cv2.INTER_CUBIC if s > 1.0 else cv2.INTER_AREA
+            )
             txt, ok = _try_decode(det, resized)
             if ok:
                 return txt
@@ -140,6 +145,11 @@ def _read_qr_text(img_bgr: np.ndarray) -> str:
         txt, ok = _try_decode(det, big_bgr)
         if ok:
             return txt
+
+    # 5) fallback terakhir: pyzbar
+    decoded = decode(img_bgr)
+    if decoded:
+        return decoded[0].data.decode("utf-8")
 
     return ""
 
@@ -179,7 +189,7 @@ def qr_to_kode_unik(qr_data: str) -> str:
     if not qr_data or "-" not in qr_data:
         raise ValueError("qr_data tidak valid")
     _, rest = qr_data.split("-", 1)
-    return "AHM-PM-" + rest
+    return rest
 
 
 def get_qr_and_sticker_id_from_base64(
