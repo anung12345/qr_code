@@ -5,6 +5,7 @@ import base64
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
 import time
+from skimage.metrics import structural_similarity as ssim
 
 
 # ---------------- util font ----------------
@@ -275,6 +276,33 @@ def buat_label_keaslian(
     text_y = qr_y - text_h - mm_to_px(0.3)
     draw.text((text_x, text_y), kode_teks, fill="black", font=font_kode)
 
+    # ========================================
+    # Hidden text di header (atas kode unik) - COPYPROOF
+    # ========================================
+    hidden_text = "COPY"  # teks tersembunyi
+    font_hidden = _load_font(mm_to_px(1.8))  # font untuk mask teks
+
+    # Buat mask teks hidden
+    mask_img = Image.new("L", (width_px, height_px), 0)
+    draw_mask = ImageDraw.Draw(mask_img)
+    l, t, r, b = draw_mask.textbbox((0, 0), hidden_text, font=font_hidden)
+    tw, th = r - l, b - t
+    hx = (width_px - tw) // 2
+    hy = text_y - th - mm_to_px(0.5)  # posisinya di atas kode_unik
+    draw_mask.text((hx, hy), hidden_text, fill=255, font=font_hidden)
+    mask = np.array(mask_img) > 128
+
+    # Buat pola sinusoidal high-frequency
+    yy, xx = np.mgrid[0:height_px, 0:width_px]
+    pattern = (np.sin(2 * np.pi * (xx / 3)) * 6).astype(np.int8)  # amplitude rendah, freq tinggi
+
+    # Terapkan hanya di area teks tersembunyi
+    arr = np.array(img)
+    arr[:, :, 0] = np.clip(arr[:, :, 0] + (pattern * mask), 0, 255)
+
+    # Replace gambar
+    img = Image.fromarray(arr)
+
     # fingerprint
     noise_radius = max(2, int(round(qr_side * fp_ratio)))
     cx, cy = qr_x + qr_side // 2, qr_y + qr_side // 2
@@ -430,57 +458,397 @@ def _fft_snr(img_bgr, meta_fft=None, fft_snr_radius=3, fft_fx=10, fft_fy=6, save
     }
     return float(snr), details
 
+# def verifikasi_label_fleksibel(
+#     foto_path: str | None = None,
+#     output_name: str = "label_ali.png",
+#     threshold_mse: int = 12000,
+#     simpan_debug: bool = True,
+#     fft_snr_threshold: float = 2.0  # ambang deteksi watermark robust
+# ):
+#     """
+#     Verifikasi hybrid:
+#       - Fingerprint (MSE) → autentikasi (fragile)
+#       - FFT-watermark (SNR) → deteksi watermark robust di background
+#     Keputusan:
+#       - ✅ ASLI   : fingerprint cocok (MSE < ambang)
+#       - ⚠️ RUSAK  : fingerprint TIDAK cocok, tetapi watermark ATAU QR masih OK
+#       - ❌ SALINAN: fingerprint TIDAK cocok, watermark TIDAK terdeteksi, dan QR TIDAK terbaca
+#     """
+#     # ----- Ambil fingerprint & meta -----
+#     base = os.path.splitext(output_name)[0]
+#     fingerprint_path = _cari_path(f"{base}_fingerprint.npy")
+#     meta_path        = _cari_path(f"{base}_meta.npy")
+#     if not fingerprint_path or not meta_path:
+#         raise FileNotFoundError("Fingerprint/meta tidak ditemukan di folder data/. Pastikan sudah generate label.")
+#
+#     fingerprint = np.load(fingerprint_path)  # grayscale (h,w)
+#     meta = np.load(meta_path, allow_pickle=True).item()
+#     cx_rel, cy_rel, r_rel = float(meta["cx_rel"]), float(meta["cy_rel"]), float(meta["r_rel"])
+#     meta_fft = meta.get("fft", None)
+#
+#     # ----- Tentukan sumber gambar yang diverifikasi -----
+#     if foto_path is None:
+#         # mode test: pakai file generate
+#         sumber = _cari_path(output_name)
+#         if not sumber:
+#             raise FileNotFoundError(f"File generate tidak ditemukan: data/{output_name}")
+#     else:
+#         sumber = _cari_path(foto_path)
+#         if not sumber:
+#             raise FileNotFoundError(f"Foto tidak ditemukan: {foto_path} atau data/{foto_path}")
+#
+#     img_bgr = cv2.imread(sumber)
+#     if img_bgr is None:
+#         raise ValueError("Gagal membaca gambar. Format tidak didukung atau file korup.")
+#
+#     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+#     H, W = gray.shape
+#
+#     # ----- Hitung ROI absolut dari rasio relatif -----
+#     cx = int(round(cx_rel * W))
+#     cy = int(round(cy_rel * H))
+#     r  = int(round(r_rel  * W))  # skala horizontal
+#
+#     r = max(4, min(r, cx, cy, W - cx - 1, H - cy - 1))
+#     y1, y2 = cy - r, cy + r
+#     x1, x2 = cx - r, cx + r
+#     crop = gray[y1:y2, x1:x2]
+#     if crop.size == 0:
+#         raise ValueError("Crop kosong—meta/posisi tidak cocok dengan gambar.")
+#
+#     crop_resized = cv2.resize(crop, (fingerprint.shape[1], fingerprint.shape[0]), interpolation=cv2.INTER_AREA)
+#
+#     # ----- MSE autentikasi (fragile fingerprint) -----
+#     mse = float(np.mean((crop_resized.astype("float32") - fingerprint.astype("float32"))**2))
+#     fp_ok = bool(mse < threshold_mse)
+#
+#     # ----- Baca QR (3 cara) -----
+#     qr = cv2.QRCodeDetector()
+#     data_raw, _, _ = qr.detectAndDecode(img_bgr)
+#
+#     blur = cv2.GaussianBlur(gray, (3, 3), 0)
+#     _, thr = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+#     data_thr, _, _ = qr.detectAndDecode(thr)
+#
+#     qr_half = int(r * 2.5)
+#     Y1, Y2 = max(0, cy - qr_half), min(H, cy + qr_half)
+#     X1, X2 = max(0, cx - qr_half), min(W, cx + qr_half)
+#     crop_qr = img_bgr[Y1:Y2, X1:X2]
+#     data_crop, _, _ = qr.detectAndDecode(crop_qr)
+#
+#     qr_data = data_raw or data_thr or data_crop or ""
+#     qr_ok = bool(qr_data)
+#
+#     # ----- FFT-watermark detection (robust) -----
+#     dbg_base = os.path.join("data", f"{base}_dbg") if simpan_debug else None
+#     fft_snr, fft_detail = _fft_snr(
+#         img_bgr,
+#         meta_fft=meta_fft,
+#         fft_snr_radius=3,
+#         fft_fx=(meta_fft or {}).get("fx", 10),
+#         fft_fy=(meta_fft or {}).get("fy", 6),
+#         save_dbg=(dbg_base + "_spec.png") if simpan_debug else None
+#     )
+#     wm_ok = bool(fft_snr >= float(fft_snr_threshold))
+#
+#     # ----- Simpan debug -----
+#     debug_paths = {}
+#     if simpan_debug:
+#         os.makedirs("data", exist_ok=True)
+#         base_dbg = os.path.join("data", base)
+#         dbg_crop_path = f"{base_dbg}_dbg_crop.png"
+#         dbg_thr_path  = f"{base_dbg}_dbg_thr.png"
+#         dbg_qr_path   = f"{base_dbg}_dbg_qr_crop.png"
+#         cv2.imwrite(dbg_crop_path, crop_resized)
+#         cv2.imwrite(dbg_thr_path,   thr)
+#         if crop_qr.size:
+#             cv2.imwrite(dbg_qr_path, crop_qr)
+#         debug_paths.update({"crop_resized": dbg_crop_path, "thr": dbg_thr_path, "qr_crop": dbg_qr_path})
+#         # tambahkan paths FFT
+#         debug_paths.update(fft_detail.get("debug", {}))
+#
+#     # ----- Keputusan tiga level + cetak ringkas -----
+#     if fp_ok and wm_ok:
+#         status_code = "ASLI"
+#         status = "✅ ASLI"
+#         reason = "Fingerprint cocok (MSE di bawah ambang)."
+#     else:
+#         if wm_ok or fp_ok or qr_ok:
+#             status_code = "RUSAK"
+#             detail = []
+#             if not wm_ok: detail.append("watermark tidak terdeteksi")
+#             if not fp_ok: detail.append("fingerprint tidak cocok")
+#             if not qr_ok: detail.append("QR sulit/tidak terbaca")
+#             reason = " / ".join(detail) if detail else "Sinyal tidak ideal."
+#             status = f"⚠️ RUSAK — {reason}"
+#         else:
+#             status_code = "SALINAN"
+#             status = "❌ SALINAN"
+#             reason = "Fingerprint tidak cocok, watermark tidak terdeteksi, dan QR tidak terbaca."
+#
+#     print(f"📄 Sumber: {sumber}")
+#     print(f"📏 MSE = {mse:.2f}  |  Ambang = {threshold_mse}  ->  {'cocok' if fp_ok else 'tidak'}")
+#     print(f"🌊 FFT SNR ≈ {fft_snr:.2f}  |  Ambang = {fft_snr_threshold}  ->  {'terdeteksi' if wm_ok else 'tidak'}")
+#     print(f"🔗 QR: {qr_data if qr_ok else '(tidak terbaca)'}")
+#     print(f"🧾 Status: {status}")
+#
+#     return {
+#         "source": sumber,
+#         "mse": round(mse, 2),
+#         "threshold_mse": threshold_mse,
+#         "authentic": fp_ok,                 # tetap expose sebagai "fingerprint ok"
+#         "fp_ok": fp_ok,
+#         "fft_snr": round(fft_snr, 2),
+#         "fft_threshold": float(fft_snr_threshold),
+#         "watermark_present": wm_ok,
+#         "wm_ok": wm_ok,
+#         "qr_data": qr_data,
+#         "qr_ok": qr_ok,
+#         "status": status,
+#         "status_code": status_code,         # 'ASLI' | 'RUSAK' | 'SALINAN'
+#         "reason": reason,
+#         "copy_with_watermark": (not fp_ok) and wm_ok,  # kompatibel dengan versi lama
+#         "methods": {"raw": bool(data_raw), "threshold": bool(data_thr), "crop": bool(data_crop)},
+#         "roi": {"cx": cx, "cy": cy, "r": r, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+#                 "qr_crop": {"X1": X1, "Y1": Y1, "X2": X2, "Y2": Y2}},
+#         "fft_detail": fft_detail,
+#         "paths": {"fingerprint": fingerprint_path, "meta": meta_path, "debug": debug_paths},
+#     }
+
+# def verifikasi_label_fleksibel(
+#     foto_path: str | None = None,
+#     output_name: str = "label_ali.png",
+#     threshold_mse: int = 12000,
+#     threshold_ssim: float = 0.5,           # ambang SSIM baru
+#     simpan_debug: bool = True,
+#     fft_snr_threshold: float = 2.0
+# ):
+#     """
+#     Verifikasi hybrid (ensemble):
+#       - Fingerprint (MSE + SSIM) → autentikasi fragile
+#       - FFT-watermark (SNR)      → deteksi robust
+#       - QR                       → fallback check
+#     Keputusan:
+#       - ✅ ASLI   : fingerprint cocok (MSE < ambang **dan** SSIM > ambang)
+#       - ⚠️ RUSAK  : fingerprint tidak cocok, tetapi watermark ATAU QR masih OK
+#       - ❌ SALINAN: fingerprint tidak cocok, watermark tidak terdeteksi, QR tidak terbaca
+#     """
+#     # ----- Ambil fingerprint & meta -----
+#     base = os.path.splitext(output_name)[0]
+#     fingerprint_path = _cari_path(f"{base}_fingerprint.npy")
+#     meta_path        = _cari_path(f"{base}_meta.npy")
+#     if not fingerprint_path or not meta_path:
+#         raise FileNotFoundError("Fingerprint/meta tidak ditemukan di folder data/.")
+#
+#     fingerprint = np.load(fingerprint_path)  # grayscale (h,w)
+#     meta = np.load(meta_path, allow_pickle=True).item()
+#     cx_rel, cy_rel, r_rel = float(meta["cx_rel"]), float(meta["cy_rel"]), float(meta["r_rel"])
+#     meta_fft = meta.get("fft", None)
+#
+#     # ----- Tentukan sumber gambar -----
+#     if foto_path is None:
+#         sumber = _cari_path(output_name)
+#         if not sumber:
+#             raise FileNotFoundError(f"File generate tidak ditemukan: data/{output_name}")
+#     else:
+#         sumber = _cari_path(foto_path)
+#         if not sumber:
+#             raise FileNotFoundError(f"Foto tidak ditemukan: {foto_path}")
+#
+#     img_bgr = cv2.imread(sumber)
+#     if img_bgr is None:
+#         raise ValueError("Gagal membaca gambar. Format tidak didukung.")
+#
+#     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+#     H, W = gray.shape
+#
+#     # ----- ROI absolut -----
+#     cx = int(round(cx_rel * W))
+#     cy = int(round(cy_rel * H))
+#     r  = int(round(r_rel  * W))
+#
+#     r = max(4, min(r, cx, cy, W - cx - 1, H - cy - 1))
+#     y1, y2 = cy - r, cy + r
+#     x1, x2 = cx - r, cx + r
+#     crop = gray[y1:y2, x1:x2]
+#     if crop.size == 0:
+#         raise ValueError("Crop kosong—meta/posisi tidak cocok dengan gambar.")
+#
+#     crop_resized = cv2.resize(crop, (fingerprint.shape[1], fingerprint.shape[0]), interpolation=cv2.INTER_AREA)
+#
+#     # ----- MSE + SSIM autentikasi -----
+#     mse = float(np.mean((crop_resized.astype("float32") - fingerprint.astype("float32"))**2))
+#     ssim_val = ssim(fingerprint.astype("float32"), crop_resized.astype("float32"), data_range=255)
+#     fp_ok = bool(mse < threshold_mse and ssim_val > threshold_ssim)
+#
+#     # ----- Baca QR (3 cara) -----
+#     qr = cv2.QRCodeDetector()
+#     data_raw, _, _ = qr.detectAndDecode(img_bgr)
+#
+#     blur = cv2.GaussianBlur(gray, (3, 3), 0)
+#     _, thr = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+#     data_thr, _, _ = qr.detectAndDecode(thr)
+#
+#     qr_half = int(r * 2.5)
+#     Y1, Y2 = max(0, cy - qr_half), min(H, cy + qr_half)
+#     X1, X2 = max(0, cx - qr_half), min(W, cx + qr_half)
+#     crop_qr = img_bgr[Y1:Y2, X1:X2]
+#     data_crop, _, _ = qr.detectAndDecode(crop_qr)
+#
+#     qr_data = data_raw or data_thr or data_crop or ""
+#     qr_ok = bool(qr_data)
+#
+#     # ----- FFT-watermark detection -----
+#     dbg_base = os.path.join("data", f"{base}_dbg") if simpan_debug else None
+#     fft_snr, fft_detail = _fft_snr(
+#         img_bgr,
+#         meta_fft=meta_fft,
+#         fft_snr_radius=3,
+#         fft_fx=(meta_fft or {}).get("fx", 10),
+#         fft_fy=(meta_fft or {}).get("fy", 6),
+#         save_dbg=(dbg_base + "_spec.png") if simpan_debug else None
+#     )
+#     wm_ok = bool(fft_snr >= float(fft_snr_threshold))
+#
+#     # ----- Simpan debug -----
+#     debug_paths = {}
+#     if simpan_debug:
+#         os.makedirs("data", exist_ok=True)
+#         base_dbg = os.path.join("data", base)
+#         dbg_crop_path = f"{base_dbg}_dbg_crop.png"
+#         dbg_thr_path  = f"{base_dbg}_dbg_thr.png"
+#         dbg_qr_path   = f"{base_dbg}_dbg_qr_crop.png"
+#         cv2.imwrite(dbg_crop_path, crop_resized)
+#         cv2.imwrite(dbg_thr_path,   thr)
+#         if crop_qr.size:
+#             cv2.imwrite(dbg_qr_path, crop_qr)
+#         debug_paths.update({"crop_resized": dbg_crop_path, "thr": dbg_thr_path, "qr_crop": dbg_qr_path})
+#         debug_paths.update(fft_detail.get("debug", {}))
+#
+#     # ----- Keputusan ensemble -----
+#     if fp_ok and wm_ok:
+#         status_code = "ASLI"
+#         status = "✅ ASLI"
+#         reason = "Fingerprint cocok (MSE rendah & SSIM tinggi)."
+#     else:
+#         if wm_ok or fp_ok or qr_ok:
+#             status_code = "RUSAK"
+#             reason = []
+#             if not wm_ok: reason.append("watermark tidak terdeteksi")
+#             if not fp_ok: reason.append("fingerprint tidak cocok")
+#             if not qr_ok: reason.append("QR sulit/tidak terbaca")
+#             status = f"⚠️ RUSAK — {' / '.join(reason)}"
+#         else:
+#             status_code = "SALINAN"
+#             status = "❌ SALINAN"
+#             reason = "Fingerprint tidak cocok, watermark tidak terdeteksi, QR tidak terbaca."
+#
+#     print(f"📄 Sumber: {sumber}")
+#     print(f"📏 MSE = {mse:.2f}  | Ambang = {threshold_mse} -> {'cocok' if mse < threshold_mse else 'tidak'}")
+#     print(f"🔍 SSIM = {ssim_val:.3f} | Ambang = {threshold_ssim} -> {'cocok' if ssim_val > threshold_ssim else 'tidak'}")
+#     print(f"🌊 FFT SNR ≈ {fft_snr:.2f} | Ambang = {fft_snr_threshold} -> {'terdeteksi' if wm_ok else 'tidak'}")
+#     print(f"🔗 QR: {qr_data if qr_ok else '(tidak terbaca)'}")
+#     print(f"🧾 Status: {status}")
+#
+#     return {
+#         "source": sumber,
+#         "mse": round(mse, 2),
+#         "threshold_mse": threshold_mse,
+#         "ssim": round(ssim_val, 3),
+#         "threshold_ssim": threshold_ssim,
+#         "fp_ok": fp_ok,
+#         "fft_snr": round(fft_snr, 2),
+#         "fft_threshold": float(fft_snr_threshold),
+#         "wm_ok": wm_ok,
+#         "qr_data": qr_data,
+#         "qr_ok": qr_ok,
+#         "status": status,
+#         "status_code": status_code,
+#         "reason": reason,
+#         "paths": {"fingerprint": fingerprint_path, "meta": meta_path, "debug": debug_paths},
+#     }
+
+def _check_hidden_text(gray, meta, contrast_threshold=50):
+    hx1, hy1, hx2, hy2 = meta["hidden_roi"]  # rel koordinat
+    H, W = gray.shape
+    x1, x2 = int(hx1*W), int(hx2*W)
+    y1, y2 = int(hy1*H), int(hy2*H)
+    roi = gray[y1:y2, x1:x2]
+
+    if roi.size == 0:
+        return False, 0.0
+
+    lap = cv2.Laplacian(roi, cv2.CV_64F)
+    contrast_val = lap.var()
+    return bool(contrast_val > contrast_threshold), float(contrast_val)
+
+
 def verifikasi_label_fleksibel(
     foto_path: str | None = None,
     output_name: str = "label_ali.png",
     threshold_mse: int = 12000,
+    threshold_ssim: float = 0.5,
     simpan_debug: bool = True,
-    fft_snr_threshold: float = 2.0  # ambang deteksi watermark robust
+    fft_snr_threshold: float = 2.0
 ):
-    """
-    Verifikasi hybrid:
-      - Fingerprint (MSE) → autentikasi (fragile)
-      - FFT-watermark (SNR) → deteksi watermark robust di background
-    Keputusan:
-      - ✅ ASLI   : fingerprint cocok (MSE < ambang)
-      - ⚠️ RUSAK  : fingerprint TIDAK cocok, tetapi watermark ATAU QR masih OK
-      - ❌ SALINAN: fingerprint TIDAK cocok, watermark TIDAK terdeteksi, dan QR TIDAK terbaca
-    """
+    import numbers
+
+    def _make_json_safe(x):
+        try:
+            import numpy as _np
+        except Exception:
+            _np = None
+        if _np is not None:
+            if isinstance(x, _np.generic):
+                return x.item()
+            if isinstance(x, _np.ndarray):
+                return x.tolist()
+        if isinstance(x, dict):
+            return {str(k): _make_json_safe(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return [_make_json_safe(v) for v in x]
+        if isinstance(x, bytes):
+            try:
+                return x.decode("utf-8")
+            except Exception:
+                return str(x)
+        if isinstance(x, (str, int, float, bool)) or x is None:
+            return x
+        return str(x)
+
     # ----- Ambil fingerprint & meta -----
     base = os.path.splitext(output_name)[0]
     fingerprint_path = _cari_path(f"{base}_fingerprint.npy")
     meta_path        = _cari_path(f"{base}_meta.npy")
     if not fingerprint_path or not meta_path:
-        raise FileNotFoundError("Fingerprint/meta tidak ditemukan di folder data/. Pastikan sudah generate label.")
+        raise FileNotFoundError("Fingerprint/meta tidak ditemukan di folder data/.")
 
-    fingerprint = np.load(fingerprint_path)  # grayscale (h,w)
+    fingerprint = np.load(fingerprint_path)
     meta = np.load(meta_path, allow_pickle=True).item()
     cx_rel, cy_rel, r_rel = float(meta["cx_rel"]), float(meta["cy_rel"]), float(meta["r_rel"])
     meta_fft = meta.get("fft", None)
 
-    # ----- Tentukan sumber gambar yang diverifikasi -----
+    # ----- Tentukan sumber gambar -----
     if foto_path is None:
-        # mode test: pakai file generate
         sumber = _cari_path(output_name)
         if not sumber:
             raise FileNotFoundError(f"File generate tidak ditemukan: data/{output_name}")
     else:
         sumber = _cari_path(foto_path)
         if not sumber:
-            raise FileNotFoundError(f"Foto tidak ditemukan: {foto_path} atau data/{foto_path}")
+            raise FileNotFoundError(f"Foto tidak ditemukan: {foto_path}")
 
     img_bgr = cv2.imread(sumber)
     if img_bgr is None:
-        raise ValueError("Gagal membaca gambar. Format tidak didukung atau file korup.")
+        raise ValueError("Gagal membaca gambar. Format tidak didukung.")
 
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     H, W = gray.shape
 
-    # ----- Hitung ROI absolut dari rasio relatif -----
+    # ----- ROI fingerprint -----
     cx = int(round(cx_rel * W))
     cy = int(round(cy_rel * H))
-    r  = int(round(r_rel  * W))  # skala horizontal
-
+    r  = int(round(r_rel  * W))
     r = max(4, min(r, cx, cy, W - cx - 1, H - cy - 1))
     y1, y2 = cy - r, cy + r
     x1, x2 = cx - r, cx + r
@@ -488,33 +856,36 @@ def verifikasi_label_fleksibel(
     if crop.size == 0:
         raise ValueError("Crop kosong—meta/posisi tidak cocok dengan gambar.")
 
-    crop_resized = cv2.resize(crop, (fingerprint.shape[1], fingerprint.shape[0]), interpolation=cv2.INTER_AREA)
+    crop_resized = cv2.resize(
+        crop, (fingerprint.shape[1], fingerprint.shape[0]), interpolation=cv2.INTER_AREA
+    )
 
-    # ----- MSE autentikasi (fragile fingerprint) -----
+    # ----- MSE + SSIM autentikasi -----
     mse = float(np.mean((crop_resized.astype("float32") - fingerprint.astype("float32"))**2))
-    fp_ok = bool(mse < threshold_mse)
+    ssim_val = ssim(fingerprint.astype("float32"), crop_resized.astype("float32"), data_range=255)
+    fp_score = (0.7 * (1 - min(mse / threshold_mse, 1.0))) + (0.3 * ssim_val)
+    fp_ok = bool(fp_score > 0.5)
 
-    # ----- Baca QR (3 cara) -----
+    # ----- QR (3 cara) -----
     qr = cv2.QRCodeDetector()
     data_raw, _, _ = qr.detectAndDecode(img_bgr)
-
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
     _, thr = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     data_thr, _, _ = qr.detectAndDecode(thr)
-
     qr_half = int(r * 2.5)
     Y1, Y2 = max(0, cy - qr_half), min(H, cy + qr_half)
     X1, X2 = max(0, cx - qr_half), min(W, cx + qr_half)
     crop_qr = img_bgr[Y1:Y2, X1:X2]
     data_crop, _, _ = qr.detectAndDecode(crop_qr)
-
     qr_data = data_raw or data_thr or data_crop or ""
     qr_ok = bool(qr_data)
 
-    # ----- FFT-watermark detection (robust) -----
+    # ----- FFT-watermark -----
+    gray_norm = cv2.equalizeHist(gray)
+    img_bgr_eq = cv2.cvtColor(gray_norm, cv2.COLOR_GRAY2BGR)
     dbg_base = os.path.join("data", f"{base}_dbg") if simpan_debug else None
     fft_snr, fft_detail = _fft_snr(
-        img_bgr,
+        img_bgr_eq,
         meta_fft=meta_fft,
         fft_snr_radius=3,
         fft_fx=(meta_fft or {}).get("fx", 10),
@@ -523,7 +894,12 @@ def verifikasi_label_fleksibel(
     )
     wm_ok = bool(fft_snr >= float(fft_snr_threshold))
 
-    # ----- Simpan debug -----
+    # ----- Hidden text -----
+    hidden_ok, hidden_val = False, 0.0
+    if "hidden_roi" in meta:
+        hidden_ok, hidden_val = _check_hidden_text(gray, meta, contrast_threshold=50)
+
+    # ----- Debug save -----
     debug_paths = {}
     if simpan_debug:
         os.makedirs("data", exist_ok=True)
@@ -536,56 +912,63 @@ def verifikasi_label_fleksibel(
         if crop_qr.size:
             cv2.imwrite(dbg_qr_path, crop_qr)
         debug_paths.update({"crop_resized": dbg_crop_path, "thr": dbg_thr_path, "qr_crop": dbg_qr_path})
-        # tambahkan paths FFT
-        debug_paths.update(fft_detail.get("debug", {}))
+        if isinstance(fft_detail, dict):
+            debug_paths.update(fft_detail.get("debug", {}))
 
-    # ----- Keputusan tiga level + cetak ringkas -----
-    if fp_ok and wm_ok:
+    # ----- Ensemble decision -----
+    reason_text = ""
+    if fp_ok and wm_ok and not hidden_ok:
         status_code = "ASLI"
         status = "✅ ASLI"
-        reason = "Fingerprint cocok (MSE di bawah ambang)."
+        reason_text = "Fingerprint cocok, watermark terdeteksi, hidden text belum muncul."
+    elif hidden_ok:
+        status_code = "SALINAN"
+        status = "❌ SALINAN"
+        reason_text = "Hidden text muncul → kemungkinan hasil copy/scan."
+    elif wm_ok or fp_ok or qr_ok:
+        status_code = "RUSAK"
+        parts = []
+        if not wm_ok: parts.append("watermark tidak terdeteksi")
+        if not fp_ok: parts.append("fingerprint tidak cocok")
+        if not qr_ok: parts.append("QR sulit/tidak terbaca")
+        reason_text = " / ".join(parts) if parts else "Sinyal tidak ideal."
+        status = f"⚠️ RUSAK — {reason_text}"
     else:
-        if wm_ok or fp_ok or qr_ok:
-            status_code = "RUSAK"
-            detail = []
-            if not wm_ok: detail.append("watermark tidak terdeteksi")
-            if not fp_ok: detail.append("fingerprint tidak cocok")
-            if not qr_ok: detail.append("QR sulit/tidak terbaca")
-            reason = " / ".join(detail) if detail else "Sinyal tidak ideal."
-            status = f"⚠️ RUSAK — {reason}"
-        else:
-            status_code = "SALINAN"
-            status = "❌ SALINAN"
-            reason = "Fingerprint tidak cocok, watermark tidak terdeteksi, dan QR tidak terbaca."
+        status_code = "SALINAN"
+        status = "❌ SALINAN"
+        reason_text = "Fingerprint tidak cocok, watermark tidak terdeteksi, QR tidak terbaca."
 
-    print(f"📄 Sumber: {sumber}")
-    print(f"📏 MSE = {mse:.2f}  |  Ambang = {threshold_mse}  ->  {'cocok' if fp_ok else 'tidak'}")
-    print(f"🌊 FFT SNR ≈ {fft_snr:.2f}  |  Ambang = {fft_snr_threshold}  ->  {'terdeteksi' if wm_ok else 'tidak'}")
-    print(f"🔗 QR: {qr_data if qr_ok else '(tidak terbaca)'}")
-    print(f"🧾 Status: {status}")
-
-    return {
-        "source": sumber,
-        "mse": round(mse, 2),
-        "threshold_mse": threshold_mse,
-        "authentic": fp_ok,                 # tetap expose sebagai "fingerprint ok"
-        "fp_ok": fp_ok,
-        "fft_snr": round(fft_snr, 2),
+    # ----- Return -----
+    result = {
+        "source": str(sumber),
+        "mse": float(round(mse, 2)),
+        "threshold_mse": int(threshold_mse),
+        "ssim": float(round(ssim_val, 3)),
+        "threshold_ssim": float(threshold_ssim),
+        "fp_score": float(round(fp_score, 3)),
+        "fp_ok": bool(fp_ok),
+        "fft_snr": float(round(fft_snr, 2)),
         "fft_threshold": float(fft_snr_threshold),
-        "watermark_present": wm_ok,
-        "wm_ok": wm_ok,
-        "qr_data": qr_data,
-        "qr_ok": qr_ok,
-        "status": status,
-        "status_code": status_code,         # 'ASLI' | 'RUSAK' | 'SALINAN'
-        "reason": reason,
-        "copy_with_watermark": (not fp_ok) and wm_ok,  # kompatibel dengan versi lama
-        "methods": {"raw": bool(data_raw), "threshold": bool(data_thr), "crop": bool(data_crop)},
-        "roi": {"cx": cx, "cy": cy, "r": r, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                "qr_crop": {"X1": X1, "Y1": Y1, "X2": X2, "Y2": Y2}},
-        "fft_detail": fft_detail,
-        "paths": {"fingerprint": fingerprint_path, "meta": meta_path, "debug": debug_paths},
+        "wm_ok": bool(wm_ok),
+        "qr_data": str(qr_data or ""),
+        "qr_ok": bool(qr_ok),
+        # tambahan hidden text
+        "hidden_ok": bool(hidden_ok),
+        "hidden_val": float(round(hidden_val, 2)),
+        "status": str(status),
+        "status_code": str(status_code),
+        "reason": str(reason_text),
+        "paths": {
+            "fingerprint": str(fingerprint_path),
+            "meta": str(meta_path),
+            "debug": debug_paths
+        },
+        "fft_detail": fft_detail
     }
+
+    result_safe = _make_json_safe(result)
+    return result_safe
+
 
 
 def file_to_base64(path_file: str) -> str:
@@ -649,10 +1032,10 @@ def base64txt_to_file(txt_path: str, output_path: str):
 
 
 if __name__ == "__main__":
-    # hasil = verifikasi_label_fleksibel("data/1757477780-00001.png", "1757477780-00001.png", 12000)
-    # print(hasil)
+    hasil = verifikasi_label_fleksibel("data/1758710021-00001.png", "1758710021-00001.png", 12000)
+    print(hasil)
     # b = base64txt_to_file("photo_2025-08-28_13-56-32_base64.txt", "output.png")
     # print(b)
-    a = buat_label_keaslian()
-    print(a)
+    # a = buat_label_keaslian()
+    # print(a)
     # buat_label_keaslian_b64()
