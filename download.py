@@ -3,7 +3,7 @@ import os
 import requests
 from requests.auth import HTTPBasicAuth
 
-API_BASE = "http://10.74.18.162:8075/db/copyproof/sticker"
+API_BASE = "http://10.84.136.64:8075/db/copyproof/sticker"
 API_USER = "testerzero"
 API_PASS = "lessthanone"
 TIMEOUT  = 30

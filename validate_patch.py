@@ -2,7 +2,7 @@
 import requests, json
 from requests.auth import HTTPBasicAuth
 
-VALIDATE_API_BASE = "http://10.74.18.162:8075/db/copyproof/validatecp"
+VALIDATE_API_BASE = "http://10.84.136.64:8075/db/copyproof/validatecp"
 API_USER = "testerzero"
 API_PASS = "lessthanone"
 TIMEOUT   = 30

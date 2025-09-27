@@ -6,7 +6,7 @@ import os
 import shutil
 from ori import buat_label_keaslian  # gunakan fungsi generator milikmu
 
-API_BASE = "http://10.74.18.162:8075/db/copyproof/sticker"
+API_BASE = "http://10.84.136.64:80755/db/copyproof/sticker"
 API_USER = "testerzero"
 API_PASS = "lessthanone"
 TIMEOUT  = 20  # detik
