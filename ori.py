@@ -143,17 +143,43 @@ def buat_label_keaslian(
     ImageDraw.Draw(mask_fp).ellipse((0, 0, 2*noise_radius, 2*noise_radius), fill=255)
     img.paste(noise_img, (cx-noise_radius, cy-noise_radius), mask_fp)
 
-    # FFT-watermark (exclude QR area)
-    wm_mask = np.ones((height_px, width_px), dtype=np.float32)
-    margin = 2
-    wm_mask[qr_y-margin:qr_y+qr_side+margin, qr_x-margin:qr_x+qr_side+margin] = 0.0
-    yy, xx = np.mgrid[0:height_px, 0:width_px]
-    pattern = np.sin(2*np.pi*(fft_fx*xx/width_px + fft_fy*yy/height_px)).astype(np.float32)
+    # =========================================================
+    # FFT-watermark v2 — anti-copy adaptive sinusoidal embedding
+    # =========================================================
     arr = np.array(img)
     ycrcb = cv2.cvtColor(arr, cv2.COLOR_RGB2YCrCb).astype(np.float32)
     Y = ycrcb[:, :, 0]
-    Y = np.clip(Y + fft_amp * pattern * wm_mask, 0, 255)
-    ycrcb[:, :, 0] = Y
+
+    # mask area (hindari QR)
+    wm_mask = np.ones_like(Y, np.float32)
+    margin = 3
+    wm_mask[qr_y - margin:qr_y + qr_side + margin, qr_x - margin:qr_x + qr_side + margin] = 0.0
+
+    # koordinat
+    yy, xx = np.mgrid[0:Y.shape[0], 0:Y.shape[1]]
+
+    # pola sinusoidal diagonal ganda (lebih kompleks)
+    fx, fy = 32, 24
+    pattern = (
+            np.sin(2 * np.pi * (fx * xx / Y.shape[1] + fy * yy / Y.shape[0])) +
+            0.5 * np.sin(2 * np.pi * (fx * xx / Y.shape[1] - fy * yy / Y.shape[0]))
+    ).astype(np.float32)
+
+    # amplitudo adaptif berdasar luminance lokal
+    amp_base = 0.5  # rata-rata amplitudo dasar
+    amp_map = amp_base * (0.3 + 0.7 * (Y / 255.0) ** 2)
+
+    # tambahkan sedikit noise acak untuk menghindari pattern printer
+    rand_noise = np.random.normal(0, 0.15, Y.shape).astype(np.float32)
+
+    # gabungkan semua
+    Y_mod = Y + (amp_map * pattern + 0.25 * rand_noise) * wm_mask
+
+    # clamp
+    Y_mod = np.clip(Y_mod, 0, 255)
+    ycrcb[:, :, 0] = Y_mod
+
+    # ubah balik ke RGB
     img = Image.fromarray(cv2.cvtColor(ycrcb.astype(np.uint8), cv2.COLOR_YCrCb2RGB))
 
     # simpan
@@ -561,8 +587,15 @@ def base64txt_to_file(txt_path: str, output_path: str):
 
 
 if __name__ == "__main__":
-    hasil = verifikasi_label_fleksibel("copy.jpg", "sticker_copyproof.png", 12000)
-    print(hasil)
+    for i in range(5):
+        n = i + 1
+        hasil = verifikasi_label_fleksibel(f"copy{n}.jpg", "sticker_copyproof.png", 12000)
+        print(hasil)
+
+    for i in range(6):
+        n = i + 1
+        hasil = verifikasi_label_fleksibel(f"asli{n}.jpg", "sticker_copyproof1.png", 12000)
+        print(hasil)
     # b = base64txt_to_file("photo_2025-08-28_13-56-32_base64.txt", "output.png")
     # print(b)
     # a = buat_label_keaslian()
