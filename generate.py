@@ -3,6 +3,7 @@ import json
 import requests
 from requests.auth import HTTPBasicAuth
 import os
+import time
 import shutil
 from ori import buat_label_keaslian  # gunakan fungsi generator milikmu
 
@@ -52,30 +53,65 @@ def _patch_upload_binary(id_sticker: str, field: str, file_path: str) -> request
         resp = requests.patch(url, data=f, headers=headers, auth=auth, timeout=TIMEOUT)
     return resp
 
-def cleanup_data_dir(base_dir: str = "data") -> bool:
+# generate.py
+def cleanup_data_dir(created_files: list[str]) -> bool:
     """
-    Hapus folder `data/` beserta isinya supaya tidak menumpuk.
-    Keamanan:
-      - hanya menghapus jika nama folder persis 'data'
-      - dan folder itu berada di working directory saat ini
-    Return True jika berhasil / tidak ada, False jika gagal.
+    Hapus hanya file yang dibuat dalam sesi ini (bukan seluruh folder `data/`).
+    Return True jika semua berhasil dihapus.
     """
-    try:
-        if not os.path.exists(base_dir):
-            return True
-        # Pastikan yang dihapus memang ./data (bukan path lain)
-        abs_base = os.path.abspath(base_dir)
-        abs_cwd  = os.path.abspath(os.getcwd())
-        # valid jika parent-nya cwd dan basename-nya 'data'
-        if os.path.dirname(abs_base) != abs_cwd or os.path.basename(abs_base) != "data":
-            print(f"⚠️ Skip cleanup: target bukan ./data -> {abs_base}")
-            return False
-        shutil.rmtree(abs_base, ignore_errors=False)
-        print("🧹 Folder ./data berhasil dibersihkan.")
+    if not created_files:
+        print("⚠️ Tidak ada file untuk dibersihkan.")
         return True
+
+    print(f"\n🧩 Cleanup started...")
+    success = True
+    for fpath in created_files:
+        try:
+            if os.path.exists(fpath):
+                os.remove(fpath)
+                print(f"🧹 Hapus file: {fpath}")
+            else:
+                print(f"⚠️ File sudah hilang: {fpath}")
+        except Exception as e:
+            print(f"⚠️ Gagal hapus {fpath}: {e}")
+            success = False
+
+    # Jika folder data kosong, baru hapus foldernya
+    base_dir = os.path.dirname(created_files[0]) if created_files else "data"
+    try:
+        if os.path.exists(base_dir) and not os.listdir(base_dir):
+            os.rmdir(base_dir)
+            print(f"🧹 Folder kosong dihapus: {base_dir}")
     except Exception as e:
-        print(f"⚠️ Gagal cleanup ./data: {e}")
-        return False
+        print(f"⚠️ Tidak bisa hapus folder {base_dir}: {e}")
+
+    return success
+
+
+# def cleanup_data_dir(base_dir: str = "data") -> bool:
+#     """
+#     Hapus folder `data/` beserta isinya supaya tidak menumpuk.
+#     Keamanan:
+#       - hanya menghapus jika nama folder persis 'data'
+#       - dan folder itu berada di working directory saat ini
+#     Return True jika berhasil / tidak ada, False jika gagal.
+#     """
+#     try:
+#         if not os.path.exists(base_dir):
+#             return True
+#         # Pastikan yang dihapus memang ./data (bukan path lain)
+#         abs_base = os.path.abspath(base_dir)
+#         abs_cwd  = os.path.abspath(os.getcwd())
+#         # valid jika parent-nya cwd dan basename-nya 'data'
+#         if os.path.dirname(abs_base) != abs_cwd or os.path.basename(abs_base) != "data":
+#             print(f"⚠️ Skip cleanup: target bukan ./data -> {abs_base}")
+#             return False
+#         shutil.rmtree(abs_base, ignore_errors=False)
+#         print("🧹 Folder ./data berhasil dibersihkan.")
+#         return True
+#     except Exception as e:
+#         print(f"⚠️ Gagal cleanup ./data: {e}")
+#         return False
 
 def main(counter: int, do_patch: bool = True, cleanup: bool = True):
     # 1) POST buat sticker
@@ -83,12 +119,11 @@ def main(counter: int, do_patch: bool = True, cleanup: bool = True):
         ctx, resp = post_create_sticker(counter)
     except requests.RequestException as e:
         print(f"❌ Gagal POST: {e}")
-        if cleanup:
-            cleanup_data_dir()
         return None
 
     gen = ctx["gen"]
     payload = ctx["payload"]
+    created_files = gen.get("created_files", [])
 
     print("=== Payload (POST) ===")
     print(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -102,13 +137,17 @@ def main(counter: int, do_patch: bool = True, cleanup: bool = True):
     if not id_sticker:
         print("⚠️ Tidak ada '@name' dalam response POST.")
         if cleanup:
-            cleanup_data_dir()
+            time.sleep(0.2)
+            cleanup_data_dir(created_files)
         return None
 
     print(f"\n✅ Extracted @name: {id_sticker}")
 
     if do_patch:
         # 2) PATCH upload file PNG (sticker_copyproof_tag)
+        for fpath in created_files:
+            if not os.path.exists(fpath):
+                print(f"⚠️ File hilang sebelum upload: {fpath}")
         file_png = gen["output_path"]
         print(f"\n🚀 PATCH label PNG -> sticker_copyproof_tag: {file_png}")
         try:
@@ -149,7 +188,8 @@ def main(counter: int, do_patch: bool = True, cleanup: bool = True):
 
     # 5) Cleanup folder data
     if cleanup and id_sticker:
-        cleanup_data_dir()
+        cleanup_data_dir(created_files)
+        print(f"🧩 Cleanup for counter={counter}, id={id_sticker}")
 
     return id_sticker
 

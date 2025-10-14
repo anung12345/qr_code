@@ -205,10 +205,12 @@ def buat_label_keaslian(
         "cx_rel": cx_rel,
         "cy_rel": cy_rel,
         "r_rel": r_rel,
-        "fft": {"fx": fft_fx, "fy": fft_fy, "amp": fft_amp}
+        "fft": {"fx": fx, "fy": fy, "amp": amp_base}
     })
+    os.sync()
 
     img.save(output_path, dpi=(dpi, dpi))
+    created_files = [output_path, fingerprint_path, meta_path]
 
     print(f"✅ Label disimpan: {output_path}")
     return {
@@ -221,6 +223,7 @@ def buat_label_keaslian(
         "width_px": width_px,
         "height_px": height_px,
         "dpi": dpi,
+        "created_files": created_files,
     }
 
 
@@ -587,12 +590,12 @@ def base64txt_to_file(txt_path: str, output_path: str):
 
 
 if __name__ == "__main__":
-    for i in range(5):
+    for i in range(7):
         n = i + 1
         hasil = verifikasi_label_fleksibel(f"copy{n}.jpg", "sticker_copyproof.png", 12000)
         print(hasil)
 
-    for i in range(6):
+    for i in range(5):
         n = i + 1
         hasil = verifikasi_label_fleksibel(f"asli{n}.jpg", "sticker_copyproof1.png", 12000)
         print(hasil)
