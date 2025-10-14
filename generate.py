@@ -148,7 +148,7 @@ def main(counter: int, do_patch: bool = True, cleanup: bool = True):
             print(f"❌ Gagal PATCH metadata: {e}")
 
     # 5) Cleanup folder data
-    if cleanup:
+    if cleanup and id_sticker:
         cleanup_data_dir()
 
     return id_sticker
