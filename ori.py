@@ -590,7 +590,7 @@ def base64txt_to_file(txt_path: str, output_path: str):
 
 
 if __name__ == "__main__":
-    for i in range(7):
+    for i in range(8):
         n = i + 1
         hasil = verifikasi_label_fleksibel(f"copy{n}.jpg", "sticker_copyproof.png", 12000)
         print(hasil)
