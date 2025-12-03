@@ -159,18 +159,21 @@ def buat_label_keaslian(
     yy, xx = np.mgrid[0:Y.shape[0], 0:Y.shape[1]]
 
     # pola sinusoidal diagonal ganda (lebih kompleks)
-    fx, fy = 32, 24
+    fx = 30 + np.random.randint(-3,4)
+    fy = 22 + np.random.randint(-3,4)
+
+    yy, xx = np.mgrid[0:Y.shape[0], 0:Y.shape[1]]
     pattern = (
             np.sin(2 * np.pi * (fx * xx / Y.shape[1] + fy * yy / Y.shape[0])) +
             0.5 * np.sin(2 * np.pi * (fx * xx / Y.shape[1] - fy * yy / Y.shape[0]))
     ).astype(np.float32)
 
     # amplitudo adaptif berdasar luminance lokal
-    amp_base = 0.5  # rata-rata amplitudo dasar
+    amp_base = 0.25  # rata-rata amplitudo dasar
     amp_map = amp_base * (0.3 + 0.7 * (Y / 255.0) ** 2)
 
     # tambahkan sedikit noise acak untuk menghindari pattern printer
-    rand_noise = np.random.normal(0, 0.15, Y.shape).astype(np.float32)
+    rand_noise = np.random.normal(0, 0.25, Y.shape).astype(np.float32)
 
     # gabungkan semua
     Y_mod = Y + (amp_map * pattern + 0.25 * rand_noise) * wm_mask
@@ -590,12 +593,12 @@ def base64txt_to_file(txt_path: str, output_path: str):
 
 
 if __name__ == "__main__":
-    for i in range(8):
+    for i in range(9):
         n = i + 1
         hasil = verifikasi_label_fleksibel(f"copy{n}.jpg", "sticker_copyproof.png", 12000)
         print(hasil)
 
-    for i in range(5):
+    for i in range(10):
         n = i + 1
         hasil = verifikasi_label_fleksibel(f"asli{n}.jpg", "sticker_copyproof1.png", 12000)
         print(hasil)
